@@ -127,8 +127,9 @@ def perform_scan(servo, sensor_manager, *, start_angle: Optional[int]=None, end_
     try:
         total_angles = len(angles)
         for idx, angle in enumerate(angles):
-            servo.set_angle(angle)
-            time.sleep(cfg['settle'])
+            # Use smooth servo movement to avoid jerky head movements
+            servo.set_angle(angle, smooth=True, duration=0.4)
+            time.sleep(cfg['settle'])  # Additional settle time after movement
             
             # Display: Show current angle
             if has_display:
@@ -164,8 +165,10 @@ def perform_scan(servo, sensor_manager, *, start_angle: Optional[int]=None, end_
                 time.sleep(0.3)
                 
     finally:
+        # Smoothly return neck to center position after scanning
         mid = (cfg['start_angle'] + cfg['end_angle']) // 2
-        servo.set_angle(mid)
+        servo.set_angle(mid, smooth=True, duration=0.5)
+        time.sleep(0.3)  # Let servo reach center position
     
     # Calculate summary for display
     result = ScanResult(samples, raw_map, cfg)

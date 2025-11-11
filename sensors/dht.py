@@ -59,7 +59,7 @@ class DHT:
     
     def _read_sensor(self):
         """
-        Internal method to read from sensor with caching
+        Internal method to read from sensor with caching and retry logic
         Returns: (temperature_c, humidity_percent) or (None, None) on error
         """
         current_time = time.time()
@@ -68,28 +68,41 @@ class DHT:
         if current_time - self._last_reading_time < self._cache_duration:
             return self._cached_temp, self._cached_humidity
         
-        try:
-            temperature_c = self.device.temperature
-            humidity = self.device.humidity
-            
-            # Update cache if reading successful
-            if temperature_c is not None and humidity is not None:
-                self._cached_temp = temperature_c
-                self._cached_humidity = humidity
-                self._last_reading_time = current_time
-                return temperature_c, humidity
-            else:
-                return None, None
+        # Retry logic for DHT sensors (they can be flaky)
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                temperature_c = self.device.temperature
+                humidity = self.device.humidity
                 
-        except RuntimeError as e:
-            # DHT sensors often throw RuntimeError - this is normal
-            # Return cached values if available, otherwise None
-            if self._cached_temp is not None:
-                return self._cached_temp, self._cached_humidity
-            return None, None
-        except Exception as e:
-            print(f"DHT sensor error: {e}")
-            return None, None
+                # Validate readings are reasonable
+                if temperature_c is not None and humidity is not None:
+                    # Sanity check (DHT11: 0-50°C, 20-90% humidity)
+                    if -40 <= temperature_c <= 80 and 0 <= humidity <= 100:
+                        self._cached_temp = temperature_c
+                        self._cached_humidity = humidity
+                        self._last_reading_time = current_time
+                        return temperature_c, humidity
+                    else:
+                        print(f"[DHT] Invalid reading: {temperature_c}°C, {humidity}% - retrying...")
+                        
+            except RuntimeError as e:
+                # DHT sensors often throw RuntimeError - this is normal, retry
+                if attempt < max_retries - 1:
+                    time.sleep(0.1)  # Small delay before retry
+                    continue
+                # Last attempt failed, return cached if available
+                if self._cached_temp is not None:
+                    return self._cached_temp, self._cached_humidity
+                    
+            except Exception as e:
+                print(f"[DHT] Sensor error: {e}")
+                break
+        
+        # All retries failed, return cached or None
+        if self._cached_temp is not None:
+            return self._cached_temp, self._cached_humidity
+        return None, None
     
     def read_temperature(self):
         """

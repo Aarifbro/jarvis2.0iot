@@ -2,6 +2,7 @@
 Sensor Manager
 Initializes and manages all connected sensors.
 Provides a single point of access to sensor data.
+Integrates with sensor fusion for intelligent monitoring.
 """
 import time
 import threading
@@ -16,6 +17,7 @@ class SensorManager:
         print("Initializing Sensor Manager...")
         self.motion_callback = motion_callback
         self.sensor_status = {}
+        self._sensor_fusion = None  # Will be set later if needed
         
         # PIR motion sensor (defaults to BCM 17)
         pir_pin = int(os.getenv('PIR_PIN', '17'))
@@ -89,7 +91,27 @@ class SensorManager:
         # Print summary
         working = sum(self.sensor_status.values())
         total = len(self.sensor_status)
-        print(f"Sensor Manager ready: {working}/{total} sensors operational")
+        print(f"✓ Sensor Manager ready: {working}/{total} sensors operational")
+    
+    def enable_sensor_fusion(self, display=None):
+        """
+        Enable sensor fusion for intelligent monitoring.
+        
+        Args:
+            display: Optional display instance for showing alerts
+        """
+        try:
+            from sensors.sensor_fusion import SensorFusion
+            self._sensor_fusion = SensorFusion(self, display=display)
+            print("✓ Sensor fusion enabled")
+            return self._sensor_fusion
+        except Exception as e:
+            print(f"⚠ Could not enable sensor fusion: {e}")
+            return None
+    
+    def get_sensor_fusion(self):
+        """Get the sensor fusion instance if enabled"""
+        return self._sensor_fusion
 
     # --- Motion Handling ---
     def _pir_motion_wrapper(self):
@@ -138,14 +160,36 @@ class SensorManager:
     def get_distance(self):
         """
         Returns the distance from the ultrasonic sensor in cm.
+        
+        Returns:
+            float: Distance in cm (2-400 range)
+            None: Sensor not available
+            -1: Echo pin error (stuck HIGH/LOW)
+            -2: Out of range (>400cm or no object)
+            -3: Signal noise
         """
         if not self.ultrasonic_sensor:
             return None
         try:
-            return self.ultrasonic_sensor.measure_distance()
+            distance = self.ultrasonic_sensor.measure_distance(retries=3)
+            
+            # Interpret error codes for user
+            if distance == -1:
+                print(f"[SENSOR MGR] Ultrasonic: Echo pin error - check GPIO {self.ultrasonic_sensor.echo_pin} wiring")
+            elif distance == -2:
+                # Out of range is normal, no error message needed
+                pass
+            elif distance == -3:
+                print(f"[SENSOR MGR] Ultrasonic: Signal interference detected")
+            
+            return distance
         except Exception as e:
-            print(f"Error reading ultrasonic: {e}")
+            print(f"[SENSOR MGR] Error reading ultrasonic: {e}")
             return None
+    
+    def get_ultrasonic_distance(self):
+        """Alias for get_distance() for compatibility."""
+        return self.get_distance()
 
     def get_alcohol_level(self):
         """

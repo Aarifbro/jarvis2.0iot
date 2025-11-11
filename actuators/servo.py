@@ -20,16 +20,22 @@ def _get_shared_pigpio():
     global _shared_pigpio_instance, _pigpio_instance_count
     with _pigpio_lock:
         if pigpio is None:
+            print("[SERVO] pigpio library not installed. Install: pip install pigpio")
             return None
         if _shared_pigpio_instance is None:
             try:
                 _shared_pigpio_instance = pigpio.pi()
                 if not _shared_pigpio_instance.connected:
                     print("[SERVO] Could not connect to pigpio daemon.")
+                    print("[SERVO] Start daemon with: sudo pigpiod")
+                    print("[SERVO] Or in Docker/dev container: pigpiod (no sudo)")
                     _shared_pigpio_instance = None
                     return None
+                else:
+                    print(f"[SERVO] ✓ Connected to pigpio daemon (HW rev: {_shared_pigpio_instance.get_hardware_revision():X})")
             except Exception as e:
                 print(f"[SERVO] pigpio initialization failed: {e}")
+                print("[SERVO] Ensure daemon is running: sudo pigpiod")
                 _shared_pigpio_instance = None
                 return None
         _pigpio_instance_count += 1
@@ -90,30 +96,37 @@ class Servo:
             print(f"[SERVO] Initializing on platform: {os.uname().machine}")
         
         if self.pi is None:
-            print("FATAL: pigpio library not available or daemon not running.")
-            print("Install with 'pip install pigpio' and ensure daemon: sudo systemctl enable --now pigpiod")
+            print("⚠️  SERVO WARNING: pigpio not available - servo control disabled")
+            print("    To enable servo control:")
+            print("    1. Install: pip install pigpio")
+            print("    2. Start daemon: sudo pigpiod (or pigpiod in dev container)")
+            print("    Servo will operate in simulation mode until fixed.")
         else:
             if self.verbose:
                 print(f"[SERVO] Connected to pigpio daemon. HW revision: {self.pi.get_hardware_revision():X}")
-            print(f"Servo on pin {self.pin} initialized with pigpio (range {self.min_pulse}-{self.max_pulse}µs).")
+            print(f"✓ Servo on pin {self.pin} initialized with pigpio (range {self.min_pulse}-{self.max_pulse}µs).")
 
-    def set_angle(self, angle):
+    def set_angle(self, angle, smooth=False, duration=0.5):
         """
-        Set servo to logical angle with safety limits.
+        Set servo to logical angle with safety limits and optional smooth movement.
         The angle_offset is applied to convert logical to physical angle.
         Angle is clamped to min_angle and max_angle for safety.
         If reverse is True, the direction is inverted.
         
         Args:
             angle: Logical angle
+            smooth: Enable smooth movement with interpolation (default: False)
+            duration: Duration of smooth movement in seconds (default: 0.5)
         """
         if self.pi is None:
-            print("[WARN] pigpio not connected. Angle ignored. (Did pigpiod start?)")
+            if self.verbose:
+                print("[WARN] pigpio not connected. Angle ignored. (Did pigpiod start?)")
             return
         
         # Apply software safety limits
         if angle < self.min_angle or angle > self.max_angle:
-            print(f"[WARN] Angle {angle}° out of safe range ({self.min_angle}°–{self.max_angle}°). Clamping.")
+            if self.verbose:
+                print(f"[WARN] Angle {angle}° out of safe range ({self.min_angle}°–{self.max_angle}°). Clamping.")
             angle = max(self.min_angle, min(self.max_angle, angle))
         
         # Apply reverse if enabled (invert direction)
@@ -125,17 +138,83 @@ class Servo:
         
         # Validate physical angle is in valid range
         if physical_angle < 0 or physical_angle > 180:
-            print(f"[WARN] Physical angle {physical_angle}° out of bounds (0–180). Logical={angle}°, offset={self.angle_offset}°. Clamping.")
+            if self.verbose:
+                print(f"[WARN] Physical angle {physical_angle}° out of bounds (0–180). Logical={angle}°, offset={self.angle_offset}°. Clamping.")
             physical_angle = max(0, min(180, physical_angle))
         
-        pulse_width = self.min_pulse + (physical_angle / 180.0) * (self.max_pulse - self.min_pulse)
-        try:
-            self.pi.set_servo_pulsewidth(self.pin, pulse_width)
-            if self.verbose:
-                print(f"[SERVO] logical {angle}° (physical {physical_angle}°) => {int(pulse_width)}µs")
-        except Exception as e:
-            print(f"[ERROR] Failed to set angle {angle}: {e}")
+        # Smooth movement implementation
+        if smooth and self.current_angle is not None:
+            self._smooth_move(angle, physical_angle, duration)
+        else:
+            # Direct movement
+            pulse_width = self.min_pulse + (physical_angle / 180.0) * (self.max_pulse - self.min_pulse)
+            try:
+                self.pi.set_servo_pulsewidth(self.pin, pulse_width)
+                if self.verbose:
+                    print(f"[SERVO] logical {angle}° (physical {physical_angle}°) => {int(pulse_width)}µs")
+            except Exception as e:
+                print(f"[ERROR] Failed to set angle {angle}: {e}")
+        
         self.current_angle = angle  # Store logical angle
+    
+    def _smooth_move(self, target_angle, target_physical_angle, duration):
+        """
+        Move servo smoothly from current position to target angle using interpolation.
+        Uses ease-in-out curve for natural motion.
+        
+        Args:
+            target_angle: Target logical angle
+            target_physical_angle: Target physical angle (after offset/reverse)
+            duration: Duration of movement in seconds
+        """
+        if self.current_angle is None:
+            # No previous position, just move directly
+            self.set_angle(target_angle, smooth=False)
+            return
+        
+        start_angle = self.current_angle
+        start_physical = start_angle + self.angle_offset
+        if self.reverse:
+            start_physical = (180 - start_angle) + self.angle_offset
+        
+        # Calculate step parameters
+        steps = max(10, int(duration * 50))  # 50 steps per second
+        step_delay = duration / steps
+        
+        try:
+            for i in range(steps + 1):
+                # Ease-in-out interpolation for smooth acceleration/deceleration
+                t = i / steps
+                t_eased = self._ease_in_out(t)
+                
+                # Interpolate physical angle
+                current_physical = start_physical + (target_physical_angle - start_physical) * t_eased
+                current_physical = max(0, min(180, current_physical))
+                
+                # Calculate pulse width and set
+                pulse_width = self.min_pulse + (current_physical / 180.0) * (self.max_pulse - self.min_pulse)
+                self.pi.set_servo_pulsewidth(self.pin, pulse_width)
+                
+                if i < steps:  # Don't sleep after last step
+                    time.sleep(step_delay)
+        except Exception as e:
+            print(f"[ERROR] Smooth movement interrupted: {e}")
+    
+    @staticmethod
+    def _ease_in_out(t):
+        """
+        Ease-in-out curve for smooth acceleration and deceleration.
+        
+        Args:
+            t: Progress from 0.0 to 1.0
+            
+        Returns:
+            Eased progress from 0.0 to 1.0
+        """
+        if t < 0.5:
+            return 2 * t * t
+        else:
+            return 1 - 2 * (1 - t) * (1 - t)
 
     def set_pulse_width(self, microseconds):
         """Direct low‑level pulse control (microseconds). Use for calibration."""

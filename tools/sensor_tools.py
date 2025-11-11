@@ -20,22 +20,42 @@ def _get_manager():
 
 @tool
 def check_distance(_: str = "") -> str:
-    """Return current distance in cm from ultrasonic sensor."""
+    """
+    Return current distance in cm from ultrasonic sensor.
+    Use when asked: 'check distance', 'kitni door hai', 'distance dekho', 'obstacle check'
+    """
     mgr = _get_manager()
     if not mgr:
         return "I'm afraid the distance sensor is not available, Sir."
     try:
         d = mgr.get_distance()
-        if d is None or d < 0:
-            return "Unable to read distance, Sir. The sensor may be blocked or out of range."
+        
+        # Handle error codes
+        if d is None:
+            return "Distance sensor is not initialized, Sir."
+        elif d == -1:
+            return "Distance sensor error, Sir. The echo pin may be stuck. Please check the wiring on GPIO pins."
+        elif d == -2:
+            return "No object detected within range, Sir. The area is clear beyond 4 meters."
+        elif d == -3:
+            return "Distance sensor is getting interference, Sir. Please wait a moment and try again."
+        elif d < 0:
+            return "Unable to read distance sensor, Sir. There may be a hardware issue."
+        
+        # Valid distance reading
         if d < 10:
-            return f"Very close, Sir. Only {d:.1f} centimeters."
-        elif d < 50:
-            return f"Distance is {d:.1f} centimeters, Sir."
+            return f"⚠️ Very close obstacle, Sir! Only {d:.1f} centimeters away."
+        elif d < 30:
+            return f"Close obstacle detected, Sir. {d:.1f} centimeters ahead."
+        elif d < 100:
+            return f"Obstacle at {d:.1f} centimeters, Sir."
+        elif d < 200:
+            return f"Object detected at {d:.1f} centimeters (about {d/100:.1f} meters), Sir."
         else:
-            return f"Object detected at {d:.1f} centimeters, Sir."
+            return f"Distant object at {d:.1f} centimeters, Sir. Path is mostly clear."
+            
     except Exception as e:
-        return f"Distance sensor error, Sir: {e}"
+        return f"Distance sensor malfunction, Sir: {e}"
 
 @tool
 def check_pir_motion(_: str = "") -> str:

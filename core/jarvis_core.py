@@ -139,102 +139,132 @@ class JarvisCore:
     def get_response(self, user_input: str) -> Dict[str, object]:
         """Main entrypoint to generate a response from user text."""
         
-        # Check personality engine for protection/interception
-        if self.personality:
-            personality_result = self.personality.process_input(user_input)
-            if personality_result and personality_result.get("intercept"):
-                # Owner protection or praise - return immediately
-                return {
-                    "text": personality_result["response"],
-                    "provider": "personality_engine",
-                    "fallback_used": False,
-                    "raw": {"reason": personality_result.get("reason", "personality_intercept")},
-                }
-        
-        # Use mode optimizer for intelligent offline/online decision
-        should_use_offline = False
-        offline_reason = None
-        
-        if self.mode_optimizer:
-            # Check if we should use offline mode
-            should_use_offline, offline_reason = self.mode_optimizer.should_use_offline(user_input)
-            
-            if should_use_offline and self.offline_responder:
-                self._announce_status(f"⚡ Offline mode: {offline_reason}")
-                offline_result = self.offline_responder.respond(user_input, reason=offline_reason)
-                return {
-                    **offline_result,
-                    "mode": "offline",
-                    "offline_reason": offline_reason
-                }
-        
-        # Check if we should use offline mode via hybrid router (fallback)
-        if not should_use_offline and self.hybrid_router:
-            should_use_offline, offline_reason = self.hybrid_router.should_use_offline(user_input)
-            if should_use_offline and self.offline_responder:
-                self._announce_status(f"Using offline mode ({offline_reason})...")
-                offline_result = self.offline_responder.respond(user_input, reason=f"Offline-first: {offline_reason}")
-                return {
-                    **offline_result,
-                    "quota_saved": True,
-                    "offline_reason": offline_reason
-                }
-
-        # Try online mode with LLM
-        if self.agent_executor and self.llm_manager:
-            errors = []
-            for provider in self.llm_manager.iter_providers(self._current_provider):
+        try:
+            # Check personality engine for protection/interception
+            if self.personality:
                 try:
-                    if provider is not self._current_provider:
-                        self._build_agent(provider)
+                    personality_result = self.personality.process_input(user_input)
+                    if personality_result and personality_result.get("intercept"):
+                        # Owner protection or praise - return immediately
+                        return {
+                            "text": personality_result["response"],
+                            "provider": "personality_engine",
+                            "fallback_used": False,
+                            "raw": {"reason": personality_result.get("reason", "personality_intercept")},
+                        }
+                except Exception as e:
+                    print(f"[JARVIS] Personality engine error: {e}")
+            
+            # Use mode optimizer for intelligent offline/online decision
+            should_use_offline = False
+            offline_reason = None
+            
+            if self.mode_optimizer:
+                try:
+                    # Check if we should use offline mode
+                    should_use_offline, offline_reason = self.mode_optimizer.should_use_offline(user_input)
                     
-                    self._announce_status(f"🌐 Online mode: Using {provider.name}...")
-                    response = self.agent_executor.invoke({"input": user_input})
-                    output_text = response.get("output", "I seem to be at a loss for words.")
-                    
-                    # Record successful API usage
-                    if self.mode_optimizer:
-                        self.mode_optimizer.record_api_success()
-                    if self.hybrid_router:
-                        self.hybrid_router.record_api_usage()
-                    
-                    return {
-                        "text": output_text,
-                        "provider": provider.name,
-                        "fallback_used": provider is not self.llm_manager.primary,
-                        "mode": "online",
-                        "raw": response,
-                    }
-                except Exception as exc:  # pragma: no cover - runtime/tool errors
-                    errors.append((provider.name, exc))
-                    print(f"LLM provider '{provider.name}' failed: {exc}\n{traceback.format_exc()}")
-                    
-                    # Record API failure
-                    if self.mode_optimizer:
-                        self.mode_optimizer.record_api_failure()
-                    
-                    continue
+                    if should_use_offline and self.offline_responder:
+                        self._announce_status(f"⚡ Offline mode: {offline_reason}")
+                        offline_result = self.offline_responder.respond(user_input, reason=offline_reason)
+                        return {
+                            **offline_result,
+                            "mode": "offline",
+                            "offline_reason": offline_reason
+                        }
+                except Exception as e:
+                    print(f"[JARVIS] Mode optimizer error: {e}")
+            
+            # Check if we should use offline mode via hybrid router (fallback)
+            if not should_use_offline and self.hybrid_router:
+                try:
+                    should_use_offline, offline_reason = self.hybrid_router.should_use_offline(user_input)
+                    if should_use_offline and self.offline_responder:
+                        self._announce_status(f"Using offline mode ({offline_reason})...")
+                        offline_result = self.offline_responder.respond(user_input, reason=f"Offline-first: {offline_reason}")
+                        return {
+                            **offline_result,
+                            "quota_saved": True,
+                            "offline_reason": offline_reason
+                        }
+                except Exception as e:
+                    print(f"[JARVIS] Hybrid router error: {e}")
 
-            # All online providers failed - respond with degraded message instead of conversational offline mode
-            error_message = "; ".join(f"{name}: {err}" for name, err in errors) or "No providers available"
-            self._announce_status("⚠️ Unable to reach online intelligence providers.")
+            # Try online mode with LLM
+            if self.agent_executor and self.llm_manager:
+                errors = []
+                for provider in self.llm_manager.iter_providers(self._current_provider):
+                    try:
+                        if provider is not self._current_provider:
+                            self._build_agent(provider)
+                        
+                        self._announce_status(f"🌐 Online mode: Using {provider.name}...")
+                        response = self.agent_executor.invoke({"input": user_input})
+                        output_text = response.get("output", "I seem to be at a loss for words.")
+                        
+                        # Record successful API usage
+                        if self.mode_optimizer:
+                            try:
+                                self.mode_optimizer.record_api_success()
+                            except Exception:
+                                pass
+                        if self.hybrid_router:
+                            try:
+                                self.hybrid_router.record_api_usage()
+                            except Exception:
+                                pass
+                        
+                        return {
+                            "text": output_text,
+                            "provider": provider.name,
+                            "fallback_used": provider is not self.llm_manager.primary,
+                            "mode": "online",
+                            "raw": response,
+                        }
+                    except Exception as exc:  # pragma: no cover - runtime/tool errors
+                        errors.append((provider.name, exc))
+                        print(f"LLM provider '{provider.name}' failed: {exc}\n{traceback.format_exc()}")
+                        
+                        # Record API failure
+                        if self.mode_optimizer:
+                            try:
+                                self.mode_optimizer.record_api_failure()
+                            except Exception:
+                                pass
+                        
+                        continue
+
+                # All online providers failed - respond with degraded message
+                error_message = "; ".join(f"{name}: {err}" for name, err in errors) or "No providers available"
+                self._announce_status("⚠️ Unable to reach online intelligence providers.")
+                return {
+                    "text": (
+                        "I'm unable to reach Gemini or any backup models right now. "
+                        "Protective safety routines are still active locally, but conversational "
+                        "answers will resume once connectivity is restored."
+                    ),
+                    "provider": "system",
+                    "fallback_used": True,
+                    "mode": "degraded",
+                    "raw": {"errors": [f"{name}: {str(err)}" for name, err in errors]},
+                }
+
+            # No online mode available - use offline
+            if self.offline_responder:
+                return self.offline_responder.respond(user_input, reason="Operating in offline mode (no API configured)")
+
+            raise RuntimeError("No response path available (LLM and offline responder missing)")
+            
+        except Exception as e:
+            # Catch-all error handler
+            print(f"[JARVIS] Critical error in get_response: {e}\n{traceback.format_exc()}")
             return {
-                "text": (
-                    "I'm unable to reach Gemini or any backup models right now. "
-                    "Protective safety routines are still active locally, but conversational "
-                    "answers will resume once connectivity is restored."
-                ),
-                "provider": "system",
+                "text": "I encountered an internal error while processing your request. Please try again.",
+                "provider": "error_handler",
                 "fallback_used": True,
-                "mode": "degraded",
-                "raw": {"errors": [f"{name}: {str(err)}" for name, err in errors]},
+                "mode": "error",
+                "raw": {"error": str(e)},
             }
-
-        # No online mode available - use offline
-        if self.offline_responder:
-            return self.offline_responder.respond(user_input, reason="Operating in offline mode (no API configured)")
-
-        raise RuntimeError("No response path available (LLM and offline responder missing)")
 
     def activate_listening(self) -> None:
         print("Jarvis activated, listening for command...")

@@ -61,11 +61,49 @@ class MotorController:
             print(f"[SIM] Setting motor speed: Left={left_speed}, Right={right_speed}")
             return
         
+        # Clamp speed values to 0-100 range
+        left_speed = max(0, min(100, left_speed))
+        right_speed = max(0, min(100, right_speed))
+        
         self.l_pwm.ChangeDutyCycle(left_speed)
         self.r_pwm.ChangeDutyCycle(right_speed)
 
-    def forward(self, speed=80, duration=None):
-        """Move the robot forward."""
+    def _smooth_speed_change(self, target_left, target_right, ramp_time=0.3):
+        """
+        Smoothly ramps speed to target values to prevent jerky starts.
+        
+        Args:
+            target_left: Target speed for left motor (0-100)
+            target_right: Target speed for right motor (0-100)
+            ramp_time: Time in seconds to reach target speed (default: 0.3)
+        """
+        if self.simulation_mode:
+            self._set_speed(target_left, target_right)
+            return
+        
+        steps = 10
+        step_delay = ramp_time / steps
+        
+        # Get current speeds (approximate from last command)
+        current_left = 0
+        current_right = 0
+        
+        for i in range(1, steps + 1):
+            progress = i / steps
+            left_speed = current_left + (target_left - current_left) * progress
+            right_speed = current_right + (target_right - current_right) * progress
+            self._set_speed(left_speed, right_speed)
+            time.sleep(step_delay)
+
+    def forward(self, speed=100, duration=None, smooth=True):
+        """
+        Move the robot forward with full motor power.
+        
+        Args:
+            speed: Motor speed 0-100 (default: 100 for maximum power)
+            duration: Optional duration in seconds
+            smooth: Apply smooth acceleration (default: True)
+        """
         if self.simulation_mode:
             print(f"[SIM] Moving forward at speed {speed}")
         else:
@@ -73,13 +111,25 @@ class MotorController:
             GPIO.output(self.L_IN2, GPIO.LOW)
             GPIO.output(self.R_IN1, GPIO.HIGH)
             GPIO.output(self.R_IN2, GPIO.LOW)
-        self._set_speed(speed, speed)
+        
+        if smooth:
+            self._smooth_speed_change(speed, speed)
+        else:
+            self._set_speed(speed, speed)
+        
         if duration:
             time.sleep(duration)
-            self.stop()
+            self.stop(smooth=smooth)
 
-    def backward(self, speed=80, duration=None):
-        """Move the robot backward."""
+    def backward(self, speed=100, duration=None, smooth=True):
+        """
+        Move the robot backward with full motor power.
+        
+        Args:
+            speed: Motor speed 0-100 (default: 100 for maximum power)
+            duration: Optional duration in seconds
+            smooth: Apply smooth acceleration (default: True)
+        """
         if self.simulation_mode:
             print(f"[SIM] Moving backward at speed {speed}")
         else:
@@ -87,13 +137,25 @@ class MotorController:
             GPIO.output(self.L_IN2, GPIO.HIGH)
             GPIO.output(self.R_IN1, GPIO.LOW)
             GPIO.output(self.R_IN2, GPIO.HIGH)
-        self._set_speed(speed, speed)
+        
+        if smooth:
+            self._smooth_speed_change(speed, speed)
+        else:
+            self._set_speed(speed, speed)
+        
         if duration:
             time.sleep(duration)
-            self.stop()
+            self.stop(smooth=smooth)
 
-    def left(self, speed=70, duration=None):
-        """Turn the robot left on the spot."""
+    def left(self, speed=85, duration=None, smooth=True):
+        """
+        Turn the robot left on the spot with optimized power.
+        
+        Args:
+            speed: Motor speed 0-100 (default: 85 for smooth turning)
+            duration: Optional duration in seconds
+            smooth: Apply smooth acceleration (default: True)
+        """
         if self.simulation_mode:
             print(f"[SIM] Turning left at speed {speed}")
         else:
@@ -101,13 +163,25 @@ class MotorController:
             GPIO.output(self.L_IN2, GPIO.HIGH) # Left motor backward
             GPIO.output(self.R_IN1, GPIO.HIGH)
             GPIO.output(self.R_IN2, GPIO.LOW)  # Right motor forward
-        self._set_speed(speed, speed)
+        
+        if smooth:
+            self._smooth_speed_change(speed, speed)
+        else:
+            self._set_speed(speed, speed)
+        
         if duration:
             time.sleep(duration)
-            self.stop()
+            self.stop(smooth=smooth)
 
-    def right(self, speed=70, duration=None):
-        """Turn the robot right on the spot."""
+    def right(self, speed=85, duration=None, smooth=True):
+        """
+        Turn the robot right on the spot with optimized power.
+        
+        Args:
+            speed: Motor speed 0-100 (default: 85 for smooth turning)
+            duration: Optional duration in seconds
+            smooth: Apply smooth acceleration (default: True)
+        """
         if self.simulation_mode:
             print(f"[SIM] Turning right at speed {speed}")
         else:
@@ -115,13 +189,30 @@ class MotorController:
             GPIO.output(self.L_IN2, GPIO.LOW)  # Left motor forward
             GPIO.output(self.R_IN1, GPIO.LOW)
             GPIO.output(self.R_IN2, GPIO.HIGH) # Right motor backward
-        self._set_speed(speed, speed)
+        
+        if smooth:
+            self._smooth_speed_change(speed, speed)
+        else:
+            self._set_speed(speed, speed)
+        
         if duration:
             time.sleep(duration)
-            self.stop()
+            self.stop(smooth=smooth)
 
-    def stop(self):
-        """Stop all motor movement."""
+    def stop(self, smooth=False):
+        """
+        Stop all motor movement.
+        
+        Args:
+            smooth: Apply smooth deceleration (default: False for immediate stop)
+        """
+        if smooth:
+            # Gradually reduce speed for smooth stop
+            if not self.simulation_mode:
+                for i in range(10, 0, -1):
+                    self._set_speed(i * 10, i * 10)
+                    time.sleep(0.02)
+        
         if self.simulation_mode:
             print("[SIM] Stopping motors")
         else:
@@ -130,6 +221,100 @@ class MotorController:
             GPIO.output(self.R_IN1, GPIO.LOW)
             GPIO.output(self.R_IN2, GPIO.LOW)
         self._set_speed(0, 0)
+    
+    def arc_turn(self, direction='left', speed=80, radius_factor=0.5, duration=None):
+        """
+        Perform an arc turn by running one motor faster than the other.
+        
+        Args:
+            direction: 'left' or 'right'
+            speed: Speed of faster motor (0-100)
+            radius_factor: Speed ratio of slower motor (0.0-1.0, default: 0.5)
+            duration: Optional duration in seconds
+        """
+        slow_speed = int(speed * radius_factor)
+        
+        if self.simulation_mode:
+            print(f"[SIM] Arc turning {direction} at speed {speed}/{slow_speed}")
+        else:
+            GPIO.output(self.L_IN1, GPIO.HIGH)
+            GPIO.output(self.L_IN2, GPIO.LOW)
+            GPIO.output(self.R_IN1, GPIO.HIGH)
+            GPIO.output(self.R_IN2, GPIO.LOW)
+        
+        if direction == 'left':
+            self._set_speed(slow_speed, speed)  # Left slower, right faster
+        else:
+            self._set_speed(speed, slow_speed)  # Left faster, right slower
+        
+        if duration:
+            time.sleep(duration)
+            self.stop()
+    
+    def pivot(self, direction='left', speed=60, duration=None):
+        """
+        Pivot on one wheel (one motor off, other motor on).
+        
+        Args:
+            direction: 'left' or 'right' - which direction to pivot
+            speed: Speed of the active motor (0-100)
+            duration: Optional duration in seconds
+        """
+        if self.simulation_mode:
+            print(f"[SIM] Pivoting {direction} at speed {speed}")
+        else:
+            if direction == 'left':
+                # Right motor forward, left motor off
+                GPIO.output(self.L_IN1, GPIO.LOW)
+                GPIO.output(self.L_IN2, GPIO.LOW)
+                GPIO.output(self.R_IN1, GPIO.HIGH)
+                GPIO.output(self.R_IN2, GPIO.LOW)
+                self._set_speed(0, speed)
+            else:
+                # Left motor forward, right motor off
+                GPIO.output(self.L_IN1, GPIO.HIGH)
+                GPIO.output(self.L_IN2, GPIO.LOW)
+                GPIO.output(self.R_IN1, GPIO.LOW)
+                GPIO.output(self.R_IN2, GPIO.LOW)
+                self._set_speed(speed, 0)
+        
+        if duration:
+            time.sleep(duration)
+            self.stop()
+    
+    def differential_drive(self, left_speed, right_speed, duration=None):
+        """
+        Direct control of individual motor speeds for advanced maneuvers.
+        
+        Args:
+            left_speed: Left motor speed -100 to 100 (negative = reverse)
+            right_speed: Right motor speed -100 to 100 (negative = reverse)
+            duration: Optional duration in seconds
+        """
+        if self.simulation_mode:
+            print(f"[SIM] Differential drive: L={left_speed}, R={right_speed}")
+        else:
+            # Set left motor direction
+            if left_speed >= 0:
+                GPIO.output(self.L_IN1, GPIO.HIGH)
+                GPIO.output(self.L_IN2, GPIO.LOW)
+            else:
+                GPIO.output(self.L_IN1, GPIO.LOW)
+                GPIO.output(self.L_IN2, GPIO.HIGH)
+            
+            # Set right motor direction
+            if right_speed >= 0:
+                GPIO.output(self.R_IN1, GPIO.HIGH)
+                GPIO.output(self.R_IN2, GPIO.LOW)
+            else:
+                GPIO.output(self.R_IN1, GPIO.LOW)
+                GPIO.output(self.R_IN2, GPIO.HIGH)
+            
+            self._set_speed(abs(left_speed), abs(right_speed))
+        
+        if duration:
+            time.sleep(duration)
+            self.stop()
 
     def cleanup(self):
         """Clean up GPIO resources."""
@@ -147,6 +332,16 @@ class MotorController:
             except Exception as e:
                 print(f"Error cleaning up MotorController: {e}")
             # GPIO.cleanup() is handled by HardwareManager
+
+# Singleton instance
+_motor_controller = None
+
+def get_motor_controller():
+    """Get or create the motor controller singleton"""
+    global _motor_controller
+    if _motor_controller is None:
+        _motor_controller = MotorController()
+    return _motor_controller
 
 if __name__ == '__main__':
     # Example usage

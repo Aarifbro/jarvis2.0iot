@@ -1,23 +1,23 @@
 """Greeting manager for Jarvis.
 
 Generates human-like greeting scripts that coordinate spoken lines,
-LCD display text, and status prompts. Designed to run lightweight so it
-can be imported during startup without delaying the UI.
+LCD display text, body language gestures, and status prompts.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
 import random
-from typing import List, Optional
+from typing import List, Optional, Callable
 
 
 @dataclass
 class GreetingScript:
-    """Container describing what Jarvis should say and show."""
+    """Container describing what Jarvis should say, show, and do."""
 
     speech_lines: List[str] = field(default_factory=list)
     display_lines: List[str] = field(default_factory=list)
+    gesture: Optional[str] = None  # Gesture to perform
     status_line: str = "Ready for your commands."
     log_line: Optional[str] = None
 
@@ -100,6 +100,7 @@ class GreetingManager:
         return GreetingScript(
             speech_lines=speech_lines,
             display_lines=display_lines,
+            gesture="greeting_sir",  # Add gesture
             status_line=f"Ready for instructions ({bucket}).",
             log_line=log_line,
         )
@@ -121,6 +122,56 @@ class GreetingManager:
         return GreetingScript(
             speech_lines=speech_lines,
             display_lines=display_lines,
+            gesture="greeting_wave",  # Add gesture
             status_line=f"Awaiting direction ({bucket}).",
+            log_line=log_line,
+        )
+    
+    def build_person_greeting(self, person_name: str) -> GreetingScript:
+        """
+        Build a personalized greeting for a specific person with gesture.
+        
+        Args:
+            person_name: Name of the person to greet
+        """
+        bucket = self._time_bucket()
+        
+        # Determine appropriate greeting based on person
+        person_lower = person_name.lower()
+        
+        if "sachin" in person_lower or "sir" in person_lower:
+            speech_lines = [
+                f"Good {bucket}, {person_name}.",
+                "It's an honor to assist you today.",
+                "All systems are ready for your commands."
+            ]
+            gesture = "greeting_sir"
+        elif "mam" in person_lower or "madam" in person_lower:
+            speech_lines = [
+                f"Namaste, {person_name}.",
+                f"Good {bucket} to you.",
+                "How may I assist you today?"
+            ]
+            gesture = "namaste"
+        else:
+            speech_lines = [
+                f"Hello {person_name}!",
+                f"Good {bucket}.",
+                "Great to see you!"
+            ]
+            gesture = "greeting_wave"
+        
+        display_lines = [
+            f"Hello {person_name[:12]}"[:16],  # Fit to LCD
+            f"Good {bucket.title()}!"[:16]
+        ]
+        
+        log_line = " ".join(speech_lines)
+        
+        return GreetingScript(
+            speech_lines=speech_lines,
+            display_lines=display_lines,
+            gesture=gesture,
+            status_line=f"Greeting {person_name}",
             log_line=log_line,
         )

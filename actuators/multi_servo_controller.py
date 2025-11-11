@@ -88,16 +88,29 @@ class MultiServoController:
                 )
                 # Only add the servo if pigpio was successfully initialized
                 if servo.pi is None:
-                    raise RuntimeError("pigpio not available or daemon not running.")
+                    print(f"⚠️  Servo '{name}' on pin {config['pin']} not available (pigpio issue)")
+                    continue
                 
                 self.servos[name] = servo
                 self.servo_locks[name] = threading.Lock()
                 offset_info = f" (offset: {config.get('angle_offset', 0)}°)" if config.get('angle_offset', 0) != 0 else ""
                 reverse_info = " [REVERSED]" if config.get('reverse', False) else ""
                 limit_info = f" [safe: {config.get('min_angle', 0)}°-{config.get('max_angle', 180)}°]"
-                print(f"Initialized servo '{name}' on BCM pin {config['pin']}{offset_info}{reverse_info}{limit_info}")
+                print(f"✓ Initialized servo '{name}' on BCM pin {config['pin']}{offset_info}{reverse_info}{limit_info}")
             except Exception as e:
-                print(f"Warning: Could not initialize servo '{name}' on pin {config['pin']}: {e}")
+                print(f"⚠️  Could not initialize servo '{name}' on pin {config['pin']}: {e}")
+        
+        # Print summary with helpful setup message if no servos initialized
+        working = len(self.servos)
+        total = len(servo_configs)
+        if working == 0:
+            print("⚠️  WARNING: No servos initialized!")
+            print("   To enable servo control:")
+            print("   1. Install pigpio: pip install pigpio")
+            print("   2. Start daemon: sudo pigpiod (or 'pigpiod' in dev container)")
+            print("   System will continue without servo functionality.")
+        else:
+            print(f"✓ Multi-Servo Controller ready: {working}/{total} servos operational")
         
         self.initialized = True
 
@@ -109,8 +122,16 @@ class MultiServoController:
         """Returns the lock for the given servo name."""
         return self.servo_locks.get(name)
 
-    def set_angle(self, name: str, angle: int):
-        """Sets the angle of a specific servo."""
+    def set_angle(self, name: str, angle: int, smooth: bool = True, duration: float = 0.5):
+        """
+        Sets the angle of a specific servo with optional smooth movement.
+        
+        Args:
+            name: Servo name ('neck', 'arm_l', 'arm_r')
+            angle: Target angle in degrees
+            smooth: Enable smooth movement (default: True)
+            duration: Duration of smooth movement in seconds (default: 0.5)
+        """
         servo = self.get_servo(name)
         if not servo:
             raise ValueError(f"Servo '{name}' not found.")
@@ -120,9 +141,20 @@ class MultiServoController:
             raise RuntimeError(f"Servo '{name}' is busy.")
         
         try:
-            servo.set_angle(angle)
+            servo.set_angle(angle, smooth=smooth, duration=duration)
         finally:
             lock.release()
+    
+    def set_angle_blocking(self, name: str, angle: int):
+        """
+        Sets the angle of a specific servo without smooth movement (instant).
+        Useful for immediate positioning.
+        
+        Args:
+            name: Servo name
+            angle: Target angle in degrees
+        """
+        self.set_angle(name, angle, smooth=False)
 
     def center(self, name: str):
         """Centers a specific servo."""

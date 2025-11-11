@@ -26,52 +26,116 @@ class Ultrasonic:
         else:
             print(f"Ultrasonic Sensor initialized (Simulation Mode)")
 
-    def measure_distance(self):
+    def measure_distance(self, retries=2):
         """
-        Measures the distance using the ultrasonic sensor.
-        Returns the distance in centimeters.
+        Measures the distance using the ultrasonic sensor with retry logic.
+        Returns the distance in centimeters, or negative value on error.
+        
+        Returns:
+            float: Distance in cm (2-400cm range)
+            -1: Timeout error (echo pin issue)
+            -2: Out of range (too far or too close)
+            -3: Signal noise/interference
         """
         if self.simulation_mode:
             # Simulate a distance reading
             return random.uniform(5, 200)
 
-        # Ensure trigger is low for a moment, then send a 10us pulse
-        GPIO.output(self.trigger_pin, False)
-        time.sleep(0.000005)
-        GPIO.output(self.trigger_pin, True)
-        time.sleep(0.00001)
-        GPIO.output(self.trigger_pin, False)
+        for attempt in range(retries + 1):
+            try:
+                # Ensure trigger is low for a clean start
+                GPIO.output(self.trigger_pin, False)
+                time.sleep(0.00002)  # 20 microseconds settle time
+                
+                # Send 10us trigger pulse
+                GPIO.output(self.trigger_pin, True)
+                time.sleep(0.00001)  # 10 microseconds pulse
+                GPIO.output(self.trigger_pin, False)
 
-        # Use a timeout to avoid getting stuck
-        timeout_start = time.time()
+                # Wait for echo to start (go HIGH)
+                timeout_start = time.time()
+                pulse_start = time.time()
+                
+                # Wait for echo pin to go HIGH (with timeout)
+                while GPIO.input(self.echo_pin) == 0:
+                    pulse_start = time.time()
+                    if (pulse_start - timeout_start) > 0.05:  # 50ms timeout
+                        if attempt < retries:
+                            time.sleep(0.01)  # 10ms delay before retry
+                            break
+                        print(f"[ULTRASONIC] Error: Echo pin stuck LOW (never went HIGH)")
+                        print(f"[ULTRASONIC] Check: 1) Wiring to GPIO {self.echo_pin}, 2) Sensor power, 3) Trigger pin GPIO {self.trigger_pin}")
+                        return -1
+                
+                # Check if we timed out
+                if GPIO.input(self.echo_pin) == 0:
+                    continue  # Retry
+                
+                # Echo started - now wait for it to go LOW
+                pulse_end = time.time()
+                echo_timeout = time.time()
+                
+                while GPIO.input(self.echo_pin) == 1:
+                    pulse_end = time.time()
+                    # Longer timeout for echo (max distance is ~4m = ~23ms round trip)
+                    if (pulse_end - echo_timeout) > 0.03:  # 30ms timeout
+                        if attempt < retries:
+                            time.sleep(0.01)
+                            break
+                        print(f"[ULTRASONIC] Error: Echo pin stuck HIGH (never went LOW)")
+                        print(f"[ULTRASONIC] This could mean: 1) No object in range, 2) Sensor malfunction")
+                        return -1
+                
+                # Calculate time elapsed
+                time_elapsed = pulse_end - pulse_start
+                
+                # Validate pulse width (should be between 150us and 25ms for HC-SR04)
+                if time_elapsed < 0.00015:  # Less than 150 microseconds
+                    if attempt < retries:
+                        time.sleep(0.01)
+                        continue
+                    print(f"[ULTRASONIC] Error: Pulse too short ({time_elapsed*1000000:.1f}us) - signal noise")
+                    return -3
+                
+                if time_elapsed > 0.025:  # More than 25 milliseconds
+                    if attempt < retries:
+                        time.sleep(0.01)
+                        continue
+                    # This is actually valid - just means object is far away
+                    pass
+                
+                # Speed of sound: 343 m/s = 34300 cm/s
+                # Distance = (Time x Speed) / 2 (round trip)
+                distance = (time_elapsed * 34300) / 2
+                
+                # Sanity check: HC-SR04 range is 2cm to 400cm
+                if distance < 2:
+                    if attempt < retries:
+                        time.sleep(0.01)
+                        continue
+                    print(f"[ULTRASONIC] Warning: Distance too close ({distance:.1f}cm) - may be inaccurate")
+                    return 2.0  # Return minimum valid distance
+                
+                if distance > 400:
+                    if attempt < retries:
+                        time.sleep(0.01)
+                        continue
+                    # Object too far or no object detected
+                    return -2
+                
+                # Valid reading
+                return round(distance, 1)
+                
+            except Exception as e:
+                print(f"[ULTRASONIC] Exception during measurement: {e}")
+                if attempt < retries:
+                    time.sleep(0.01)
+                    continue
+                return -1
         
-        # Wait for the echo to go high (with timeout)
-        start_time = time.time()
-        while GPIO.input(self.echo_pin) == 0:
-            start_time = time.time()
-            if start_time - timeout_start > 0.1:  # 100ms timeout
-                # This is the most common failure point
-                print("[ULTRASONIC] Timeout: Echo pin never went HIGH. Check wiring.")
-                return -1
-
-        # Wait for the echo to go low (with timeout)
-        stop_time = time.time()
-        while GPIO.input(self.echo_pin) == 1:
-            stop_time = time.time()
-            if stop_time - start_time > 0.1: # 100ms timeout
-                print("[ULTRASONIC] Timeout: Echo pin never went LOW. Check wiring.")
-                return -1
-
-        time_elapsed = stop_time - start_time
-        # Speed of sound is approx 34300 cm/s
-        # Distance = (Time x Speed of Sound) / 2 (because it's a round trip)
-        distance = (time_elapsed * 34300) / 2
-
-        # Add a sanity check for the reading
-        if distance > 400 or distance < 2:
-            return -2 # Out of range
-            
-        return distance
+        # All retries failed
+        print(f"[ULTRASONIC] All {retries + 1} attempts failed")
+        return -1
 
 if __name__ == '__main__':
     # This block allows testing this file directly

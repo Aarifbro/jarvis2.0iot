@@ -23,6 +23,18 @@ try:
 except ImportError as e:
     print(f"Warning: Could not import sensor_tools: {e}")
 
+all_communication_tools = []
+try:
+    from tools.communication_tools import all_communication_tools
+except ImportError as e:
+    print(f"Warning: Could not import communication_tools: {e}")
+
+all_conversation_tools = []
+try:
+    from tools.conversation_tools import all_conversation_tools
+except ImportError as e:
+    print(f"Warning: Could not import conversation_tools: {e}")
+
 # Provide a lightweight fallback `tool` decorator so code using `@tool` does not
 # crash at import time if LangChain isn't available yet. When LangChain is
 # imported later, its `tool` can replace this behavior for full integration.
@@ -167,40 +179,61 @@ def stop_face_tracking(_: str = "") -> str:
 
 @tool
 def follow_me(_: str = "") -> str:
-    """Start follow me mode. JARVIS will follow you using sensors and motors. Use when asked to 'follow me', 'come with me', 'mere saath chalo', or 'follow karo'."""
+    """
+    Start follow me mode. JARVIS will follow you using sensors and motors.
+    
+    Use when asked to:
+    - 'follow me' / 'mere saath chalo' / 'follow karo'
+    - 'come with me' / 'mere peeche aao'
+    - 'chalo mere sath' / 'aao mere sath'
+    
+    JARVIS will:
+    - Maintain 50cm distance from you
+    - Follow you as you move
+    - Scan left/right if it loses you
+    - Stop if you get too close (<30cm)
+    """
     global person_follower
     
     # Initialize follower if needed
     if person_follower is None:
-        from actuators.motor_controller import MotorController
+        from actuators.motor_controller import get_motor_controller
         try:
-            motors = MotorController()
-        except:
+            motors = get_motor_controller()
+        except Exception as e:
+            print(f"Motor init error: {e}")
             motors = None
         person_follower = get_person_follower(motors, sensor_manager, multi_servo_controller)
     
     # Check if already following
     if person_follower.is_following():
-        return "Already following you. Say 'stop following' to stop."
+        return "Already following you, Sir. Say 'stop following' or 'ruk jao' to stop."
     
     # Start following
     success = person_follower.start_following()
     if success:
-        return "Follow me mode activated! I will maintain distance and follow you. Say 'stop following' when done."
+        return "Follow me mode activated, Sir! I will maintain safe distance and follow you. Say 'stop following' or 'ruk jao' when done."
     else:
-        return "Failed to start follow mode. Motors or sensors may not be available."
+        return "I'm sorry Sir, I cannot start follow mode. Motors or sensors may not be available."
 
 
 @tool
 def stop_following(_: str = "") -> str:
-    """Stop follow me mode. Use when asked to 'stop following', 'stop', 'ruk jao', or 'theek hai'."""
+    """
+    Stop follow me mode.
+    
+    Use when asked to:
+    - 'stop following' / 'stop' / 'ruk jao'
+    - 'theek hai' / 'bas' / 'ruko'
+    - 'stop karo' / 'band karo'
+    """
     global person_follower
     
     if person_follower is None or not person_follower.is_following():
-        return "Not currently following."
+        return "I'm not currently following anyone, Sir."
     
     person_follower.stop_following()
-    return "Follow mode stopped. I'm staying in place now."
+    return "Follow mode stopped, Sir. I'm staying in place now."
 
 
 @tool
@@ -277,9 +310,14 @@ from core.offline_responder import OfflineResponder
 
 # Motor tools - deferred import
 try:
-    from tools.motor_tools import move_forward, move_backward, turn_left, turn_right, stop_moving
+    from tools.motor_tools import (
+        move_forward, move_backward, turn_left, turn_right, stop_moving,
+        arc_turn, pivot_turn, custom_speed_move
+    )
+    motor_tools_available = True
 except ImportError as e:
     print(f"[WARNING] Motor tools not available: {e}")
+    motor_tools_available = False
     # Create dummy tools
     @tool
     def move_forward(_: str = "") -> str:
@@ -300,6 +338,18 @@ except ImportError as e:
     @tool
     def stop_moving(_: str = "") -> str:
         """Stop moving (hardware not available)."""
+        return "Motor hardware not available"
+    @tool
+    def arc_turn(_: str = "") -> str:
+        """Arc turn (hardware not available)."""
+        return "Motor hardware not available"
+    @tool
+    def pivot_turn(_: str = "") -> str:
+        """Pivot turn (hardware not available)."""
+        return "Motor hardware not available"
+    @tool
+    def custom_speed_move(_: str = "") -> str:
+        """Custom speed move (hardware not available)."""
         return "Motor hardware not available"
 
 
@@ -783,11 +833,18 @@ def init_and_run_jarvis_core(ui_queue, user_input_queue):
             ir_list_remotes, ir_list_commands, ir_send_command, ir_learn_command,
             ir_record_signal, ir_send_saved_signal, ir_list_saved_signals, ir_delete_signal,
             move_forward, move_backward, turn_left, turn_right, stop_moving,
+            arc_turn, pivot_turn, custom_speed_move,
             track_face, stop_face_tracking, follow_me, stop_following, get_tracking_status,
             get_mode_status, switch_mode,
         ]
+        # Add robot tools (gestures, body language)
         all_tools.extend(all_robot_tools)
+        # Add sensor tools (sensor readings, monitoring)
         all_tools.extend(all_sensor_tools)
+        # Add communication tools (speech + gesture + display integration)
+        all_tools.extend(all_communication_tools)
+        # Add conversation tools (chat, introduce, analyze room)
+        all_tools.extend(all_conversation_tools)
 
         if os.getenv("JARVIS_DEBUG_TOOLS") == "1":
             try:

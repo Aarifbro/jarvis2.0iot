@@ -54,20 +54,19 @@ class Display:
 
         self.initialized = True
 
-        # ------------------------------------------------------------------
-        def _handle_display_error(self, error: Exception) -> None:
-            """Log hardware errors and fall back to simulation mode."""
-            if self.simulation_mode:
-                return
-            print(f"[Display] Hardware error: {error}. Switching to simulation mode.")
-            self.simulation_mode = True
-            if self.lcd:
-                try:
-                    self.lcd.close(clear=False)
-                except Exception:
-                    pass
-                finally:
-                    self.lcd = None
+    def _handle_display_error(self, error: Exception) -> None:
+        """Log hardware errors and fall back to simulation mode."""
+        if self.simulation_mode:
+            return
+        print(f"[Display] Hardware error: {error}. Switching to simulation mode.")
+        self.simulation_mode = True
+        if self.lcd:
+            try:
+                self.lcd.close(clear=False)
+            except Exception:
+                pass
+            finally:
+                self.lcd = None
 
     def _define_custom_chars(self):
         """Defines custom characters for facial expressions."""
@@ -327,6 +326,122 @@ class Display:
                 if self._animation_stop.wait(duration):
                     break
 
+    def show_sensor_data(self, sensor_readings: dict) -> None:
+        """
+        Display sensor readings on the LCD.
+        
+        Args:
+            sensor_readings: Dictionary with keys like 'temperature_c', 'humidity_percent', 'distance_cm', etc.
+        """
+        self._last_manual_update = time.time()
+        
+        if self.simulation_mode:
+            print(f"[Display Simulation] Sensor Data: {sensor_readings}")
+            return
+        
+        if not self.lcd:
+            return
+        
+        try:
+            with self._display_lock:
+                self.lcd.clear()
+                
+                # Row 1: Temperature and Humidity
+                temp = sensor_readings.get('temperature_c')
+                humidity = sensor_readings.get('humidity_percent')
+                
+                row1 = ""
+                if temp is not None:
+                    row1 += f"T:{temp:.1f}C "
+                if humidity is not None:
+                    row1 += f"H:{humidity:.0f}%"
+                
+                if row1:
+                    self.lcd.cursor_pos = (0, 0)
+                    self.lcd.write_string(row1[:16])
+                
+                # Row 2: Distance or other sensors
+                distance = sensor_readings.get('distance_cm')
+                alcohol = sensor_readings.get('alcohol_detected')
+                
+                row2 = ""
+                if distance is not None and distance > 0:
+                    row2 += f"D:{distance:.0f}cm "
+                if alcohol:
+                    row2 += "ALCOHOL!"
+                
+                if row2:
+                    self.lcd.cursor_pos = (1, 0)
+                    self.lcd.write_string(row2[:16])
+                    
+        except Exception as e:
+            self._handle_display_error(e)
+    
+    def show_warning(self, message: str, level: str = "WARNING") -> None:
+        """
+        Display a warning message on the LCD.
+        
+        Args:
+            message: Warning message to display
+            level: Alert level ('INFO', 'WARNING', 'CRITICAL')
+        """
+        self._last_manual_update = time.time()
+        
+        if self.simulation_mode:
+            print(f"[Display Simulation] {level}: {message}")
+            return
+        
+        if not self.lcd:
+            return
+        
+        try:
+            with self._display_lock:
+                self.lcd.clear()
+                
+                # Row 1: Alert level
+                level_text = level[:16].center(16)
+                self.lcd.cursor_pos = (0, 0)
+                self.lcd.write_string(level_text)
+                
+                # Row 2: Message (truncated)
+                msg_text = message[:16]
+                self.lcd.cursor_pos = (1, 0)
+                self.lcd.write_string(msg_text)
+                
+        except Exception as e:
+            self._handle_display_error(e)
+    
+    def show_scrolling_message(self, message: str, delay: float = 0.3) -> None:
+        """
+        Display a scrolling message on the LCD (useful for long messages).
+        
+        Args:
+            message: Message to scroll
+            delay: Delay between scroll steps in seconds
+        """
+        self._last_manual_update = time.time()
+        
+        if self.simulation_mode:
+            print(f"[Display Simulation] Scrolling: {message}")
+            return
+        
+        if not self.lcd or len(message) <= 16:
+            self.write_text(message, row=0, col=0)
+            return
+        
+        try:
+            with self._display_lock:
+                # Pad message for smooth scrolling
+                padded = "                " + message + "                "
+                
+                for i in range(len(padded) - 16):
+                    self.lcd.cursor_pos = (0, 0)
+                    self.lcd.write_string(padded[i:i+16])
+                    time.sleep(delay)
+                    
+        except Exception as e:
+            self._handle_display_error(e)
+    
     def cleanup(self):
         self.stop_idle_animation()
         if not self.simulation_mode and self.lcd:
